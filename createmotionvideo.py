@@ -540,7 +540,7 @@ def quick_motion_from_video(video_path, output_path, max_frames=None):
 
 if __name__ == "__main__":
     # Process video directly to create normalized motion video
-    video_path = "/Users/jame/Downloads/IMG_4512.mov"
+    video_path = "/Users/jame/Downloads/IMG_4527.mov"
     
     # Generate output filename based on input filename
     input_path = Path(video_path)
