@@ -103,18 +103,25 @@ class InsectDetector:
                  max_area=500,
                  min_aspect_ratio=0.3,
                  max_aspect_ratio=3.0,
-                 motion_threshold=10):
+                 motion_threshold=10,
+                 min_confidence=0.6,
+                 min_track_length=3):
         
         self.min_area = min_area
         self.max_area = max_area
         self.min_aspect_ratio = min_aspect_ratio
         self.max_aspect_ratio = max_aspect_ratio
         self.motion_threshold = motion_threshold
+        self.min_confidence = min_confidence
+        self.min_track_length = min_track_length
         
-        # Background subtractor for better motion detection
+        # Background subtractor with more conservative settings
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=500, varThreshold=16, detectShadows=True
+            history=500, varThreshold=50, detectShadows=True  # Increased threshold
         )
+        
+        # Optical flow for motion analysis
+        self.prev_gray = None
         
         # Tracker
         self.tracker = InsectTracker()
@@ -123,22 +130,54 @@ class InsectDetector:
         self.all_detections = []
         self.frame_detections = defaultdict(list)
     
-    def detect_insects_in_frame(self, frame, frame_number, timestamp):
-        """Detect insects in a single frame"""
+    def detect_insects_in_frame(self, frame, frame_number, timestamp, motion_frame=None):
+        """Detect insects in a single frame using motion data"""
         
-        # Convert to grayscale
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if motion_frame is not None:
+            # Use pre-processed motion frame (much better!)
+            motion_mask = motion_frame.copy()
+            
+            # Apply additional thresholding to focus on significant motion
+            # Motion videos are already normalized 0-255, so we can threshold directly
+            _, motion_mask = cv2.threshold(motion_mask, 50, 255, cv2.THRESH_BINARY)  # Higher threshold
+            
+        else:
+            # Fallback to background subtraction (less preferred)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            motion_mask = self.bg_subtractor.apply(frame)
         
-        # Apply background subtraction
-        fg_mask = self.bg_subtractor.apply(frame)
+        # Additional noise reduction and center filling for motion data
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        kernel_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
         
-        # Additional noise reduction
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
-        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel)
+        # First: Remove small noise with opening
+        motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_OPEN, kernel_small)
+        
+        # Second: Fill gaps and holes with aggressive closing and dilation
+        # This helps with ping pong balls and objects with uniform centers
+        motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_CLOSE, kernel_large)
+        motion_mask = cv2.dilate(motion_mask, kernel_medium, iterations=3)
+        
+        # Third: Clean up the shape with another closing operation
+        motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_CLOSE, kernel_medium)
+        
+        # Fourth: Slight erosion to bring back to more reasonable size
+        motion_mask = cv2.erode(motion_mask, kernel_small, iterations=1)
+        
+        # Fifth: Fill remaining holes using floodFill technique
+        # This is particularly effective for objects with hollow centers
+        motion_mask_filled = motion_mask.copy()
+        h, w = motion_mask.shape[:2]
+        flood_mask = np.zeros((h+2, w+2), np.uint8)
+        
+        # Find and fill holes by flood filling from the edges
+        cv2.floodFill(motion_mask_filled, flood_mask, (0,0), 255)
+        motion_mask_filled_inv = cv2.bitwise_not(motion_mask_filled)
+        motion_mask = motion_mask | motion_mask_filled_inv
         
         # Find contours
-        contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(motion_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         detections = []
         
@@ -201,12 +240,22 @@ class InsectDetector:
         
         return min(score, 1.0)
     
-    def process_video(self, video_path, output_path=None, max_frames=None):
+    def process_video(self, video_path, output_path=None, max_frames=None, motion_video_path=None):
         """Process entire video for insect detection"""
         
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise ValueError(f"Could not open video: {video_path}")
+        
+        # Open motion video if provided
+        motion_cap = None
+        if motion_video_path and os.path.exists(motion_video_path):
+            motion_cap = cv2.VideoCapture(motion_video_path)
+            if not motion_cap.isOpened():
+                print(f"Warning: Could not open motion video: {motion_video_path}")
+                motion_cap = None
+            else:
+                print(f"Using motion video: {motion_video_path}")
         
         # Get video properties
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -218,6 +267,8 @@ class InsectDetector:
             total_frames = min(total_frames, max_frames)
         
         print(f"Processing {total_frames} frames at {fps:.2f} FPS")
+        if motion_cap:
+            print("Using pre-processed motion data for better accuracy")
         
         # Setup output video if requested
         out = None
@@ -233,10 +284,21 @@ class InsectDetector:
             if not ret:
                 break
             
+            # Read corresponding motion frame if available
+            motion_frame = None
+            if motion_cap:
+                ret_motion, motion_frame = motion_cap.read()
+                if ret_motion:
+                    # Convert to grayscale if needed
+                    if len(motion_frame.shape) == 3:
+                        motion_frame = cv2.cvtColor(motion_frame, cv2.COLOR_BGR2GRAY)
+                else:
+                    motion_frame = None
+            
             timestamp = frame_number / fps
             
             # Detect insects
-            detections = self.detect_insects_in_frame(frame, frame_number, timestamp)
+            detections = self.detect_insects_in_frame(frame, frame_number, timestamp, motion_frame)
             
             # Draw detections on frame if creating output video
             if out is not None:
@@ -251,6 +313,8 @@ class InsectDetector:
                 print(f"Processed: {frame_number}/{total_frames} ({fps_processing:.1f} FPS)", end='\r')
         
         cap.release()
+        if motion_cap:
+            motion_cap.release()
         if out:
             out.release()
         
@@ -390,15 +454,15 @@ def main():
     """Main function for testing"""
     
     # Example usage
-    video_path = "/Users/jame/Downloads/IMG_4532.mov"  # Use your video path
+    video_path = "/Users/jame/Downloads/IMG_2219.mov"  # Use your video path
     
-    # Create detector with parameters tuned for insects
+    # Create detector with stricter parameters to reduce false positives
     detector = InsectDetector(
-        min_area=300,      # Smaller insects
-        max_area=1000,     # Medium-sized insects
-        min_aspect_ratio=0.2,  # Can be quite elongated
-        max_aspect_ratio=5.0,
-        motion_threshold=8
+        min_area=400,         # Even larger minimum area
+        max_area=800,         # Smaller maximum area for typical pollinators
+        min_aspect_ratio=0.4, # More restrictive aspect ratio
+        max_aspect_ratio=3.0, # Less elongation allowed
+        motion_threshold=20   # Higher threshold for motion sensitivity
     )
     
     # Process video
@@ -407,11 +471,30 @@ def main():
     output_json = f"{input_path.stem}_insect_data.json"
     output_crops = f"{input_path.stem}_insect_crops"
     
-    print("Starting insect detection...")
+    # Look for corresponding motion video
+    motion_video_path = f"{input_path.stem}_motion_normalized.mp4"
+    if not os.path.exists(motion_video_path):
+        print(f"Motion video not found: {motion_video_path}")
+        print("Creating motion video first...")
+        
+        # Import and use your motion creation function
+        import sys
+        sys.path.append(os.path.dirname(__file__))
+        from createmotionvideo import create_motion_video_from_video_streaming
+        
+        # Create motion video
+        create_motion_video_from_video_streaming(
+            video_path,
+            motion_video_path,
+            fps=None  # Use original FPS
+        )
+    
+    print("Starting insect detection with motion video...")
     summary = detector.process_video(
         video_path, 
         output_path=output_video,
-        max_frames=36000  # Around 10 minute limit for testing
+        max_frames=36000,  # Around 10 minute limit for testing
+        motion_video_path=motion_video_path  # Use motion video!
     )
     
     # Export results for Swift UI
@@ -424,6 +507,34 @@ def main():
     print(f"Total detections: {summary['total_detections']}")
     print(f"Unique tracks: {summary['unique_tracks']}")
     print(f"Frames with detections: {summary['frames_with_detections']}")
+    
+    # Additional filtering based on track quality
+    quality_tracks = [track for track in summary['tracks_info'] 
+                     if track['detection_count'] >= 3 and track['avg_confidence'] > 0.5]
+    
+    # Even stricter filtering for likely real pollinators
+    pollinator_tracks = [track for track in summary['tracks_info'] 
+                        if track['detection_count'] >= 5 and   # Must be seen in at least 5 frames
+                           track['avg_confidence'] > 0.7 and   # High confidence
+                           track['max_velocity'] > 1.0]        # Must be moving (not static noise)
+    
+    print(f"High-quality tracks (3+ detections, >0.5 confidence): {len(quality_tracks)}")
+    print(f"Likely pollinators (5+ detections, >0.7 confidence, moving): {len(pollinator_tracks)}")
+    
+    if len(pollinator_tracks) > 0:
+        print("\nLikely pollinator tracks:")
+        for track in sorted(pollinator_tracks, key=lambda x: x['detection_count'], reverse=True)[:10]:
+            print(f"  Track {track['track_id']}: {track['detection_count']} detections, "
+                  f"confidence: {track['avg_confidence']:.2f}, "
+                  f"max velocity: {track['max_velocity']:.1f}, "
+                  f"frames: {track['first_frame']}-{track['last_frame']}")
+    
+    if len(quality_tracks) > 0:
+        print(f"\nAll high-quality tracks (showing top 10):")
+        for track in sorted(quality_tracks, key=lambda x: x['detection_count'], reverse=True)[:10]:
+            print(f"  Track {track['track_id']}: {track['detection_count']} detections, "
+                  f"confidence: {track['avg_confidence']:.2f}, "
+                  f"frames: {track['first_frame']}-{track['last_frame']}")
 
 if __name__ == "__main__":
     main()
