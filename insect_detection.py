@@ -394,8 +394,8 @@ def main():
     
     # Create detector with parameters tuned for insects
     detector = InsectDetector(
-        min_area=50,      # Smaller insects
-        max_area=300,     # Medium-sized insects
+        min_area=300,      # Smaller insects
+        max_area=1000,     # Medium-sized insects
         min_aspect_ratio=0.2,  # Can be quite elongated
         max_aspect_ratio=5.0,
         motion_threshold=8
