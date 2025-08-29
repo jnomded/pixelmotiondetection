@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
-import os
 import json
+import os
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import List, Tuple, Dict, Optional
@@ -9,100 +9,97 @@ import time
 from collections import defaultdict
 import math
 
-
+@dataclass
 class InsectDetection:
-    """
-    Class for detecting insects in video frames.
-    """
+    """Data class for insect detection results"""
     frame_number: int
     timestamp: float
-    bbox: Tuple[int, int, int, int]  # (x, y, w, h)
+    bbox: Tuple[int, int, int, int]  # x, y, width, height
     center: Tuple[float, float]
     area: float
     velocity: Tuple[float, float] = (0.0, 0.0)
     confidence: float = 0.0
     track_id: Optional[int] = None
-
+    
     def to_dict(self):
         return asdict(self)
-    
-class InsectTracker:
-    """Class to track insects across video frames."""
 
+class InsectTracker:
+    """Simple tracker for following insects across frames"""
+    
     def __init__(self, max_distance=50, max_frames_missing=5):
         self.tracks = {}
         self.next_track_id = 0
         self.max_distance = max_distance
         self.max_frames_missing = max_frames_missing
-
+        
     def update(self, detections: List[InsectDetection], frame_number: int) -> List[InsectDetection]:
-        """Update tracks with new detections."""
-        #remove old tracks
-
+        """Update tracks with new detections"""
+        
+        # Remove old tracks that haven't been updated
         self.tracks = {
-            tid: track for tid, track in self.tracks.items()
+            tid: track for tid, track in self.tracks.items() 
             if frame_number - track['last_seen'] <= self.max_frames_missing
         }
-
-        #match detections to current tracks
+        
+        # Match detections to existing tracks
         matched_detections = []
-
+        
         for detection in detections:
             best_track_id = None
             min_distance = float('inf')
-
-            #find closest track
+            
+            # Find closest existing track
             for track_id, track in self.tracks.items():
                 distance = math.sqrt(
-                    (detection.center[0] - track['last_position'].center[0]) ** 2 +
-                    (detection.center[1] - track['last_position'].center[1]) ** 2
+                    (detection.center[0] - track['last_position'][0])**2 +
+                    (detection.center[1] - track['last_position'][1])**2
                 )
-
+                
                 if distance < min_distance and distance < self.max_distance:
                     min_distance = distance
                     best_track_id = track_id
-
-                #assign to existing or create new
-
-                if best_track_id is not None:
-                    #update existing
-                    track = self.tracks[best_track_id]
-                    detection.track_id = best_track_id
-
-                    #calculate velocity
-                    dt= frame_number - track['last_frame']
-                    if dt > 0:
-                        detection.velocity = (
-                            (detection.center[0] - track['last_position'].center[0]) / dt,
-                            (detection.center[1] - track['last_position'].center[1]) / dt
-                        )
-
-                    #update track info 
-                    track['last_position'] = detection.center
-                    track['last_frame'] = frame_number
-                    track['last_seen'] = frame_number
-                    track['total_detections'] += 1
-
-                else:
-                    #create new track
-                    detection.track_id = self.next_track_id
-                    self.tracks[self.next_track_id] = {
-                        'last_position': detection.center,
-                        'last_frame': frame_number,
-                        'last_seen': frame_number,
-                        'total_detections': 1
-                    }
-                    self.next_track_id += 1
-                
-                matched_detections.append(detection)
             
-            return matched_detections
+            # Assign to existing track or create new one
+            if best_track_id is not None:
+                # Update existing track
+                track = self.tracks[best_track_id]
+                detection.track_id = best_track_id
+                
+                # Calculate velocity
+                dt = frame_number - track['last_frame']
+                if dt > 0:
+                    detection.velocity = (
+                        (detection.center[0] - track['last_position'][0]) / dt,
+                        (detection.center[1] - track['last_position'][1]) / dt
+                    )
+                
+                # Update track info
+                track['last_position'] = detection.center
+                track['last_frame'] = frame_number
+                track['last_seen'] = frame_number
+                track['total_detections'] += 1
+                
+            else:
+                # Create new track
+                detection.track_id = self.next_track_id
+                self.tracks[self.next_track_id] = {
+                    'last_position': detection.center,
+                    'last_frame': frame_number,
+                    'last_seen': frame_number,
+                    'total_detections': 1
+                }
+                self.next_track_id += 1
+            
+            matched_detections.append(detection)
+        
+        return matched_detections
 
 class InsectDetector:
-    """main class for detecting insects inside of video"""
-
-    def __init__(self,
-                 min_area=20,
+    """Main class for detecting flying insects in video"""
+    
+    def __init__(self, 
+                 min_area=20, 
                  max_area=500,
                  min_aspect_ratio=0.3,
                  max_aspect_ratio=3.0,
@@ -113,56 +110,56 @@ class InsectDetector:
         self.min_aspect_ratio = min_aspect_ratio
         self.max_aspect_ratio = max_aspect_ratio
         self.motion_threshold = motion_threshold
-
-        #background subtractor for better motion detection
-        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=16, detectShadows=True)
-        #tracker
+        
+        # Background subtractor for better motion detection
+        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+            history=500, varThreshold=16, detectShadows=True
+        )
+        
+        # Tracker
         self.tracker = InsectTracker()
-
-        #results storage
+        
+        # Results storage
         self.all_detections = []
         self.frame_detections = defaultdict(list)
-
+    
     def detect_insects_in_frame(self, frame, frame_number, timestamp):
         """Detect insects in a single frame"""
-
-        #should be grayscale
+        
+        # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        #background removal
+        
+        # Apply background subtraction
         fg_mask = self.bg_subtractor.apply(frame)
-
-        #noise reduction, open removed external noise, close small holes
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)) #creates array 3, 3 of 0 1 in shape of ellipse for bugssssss
+        
+        # Additional noise reduction
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
         fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel)
-
-        #contour detection !!
-
+        
+        # Find contours
         contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
+        
         detections = []
-
+        
         for contour in contours:
-            #filter out by area
+            # Filter by area
             area = cv2.contourArea(contour)
             if area < self.min_area or area > self.max_area:
                 continue
-
-            #get bounding rectangle
+            
+            # Get bounding rectangle
             x, y, w, h = cv2.boundingRect(contour)
-
-            #filter by aspect ratio (definitely come back and edit this!!! not all insects are long asf)
-
-            aspect_ratio = w /h if h > 0 else 0
+            
+            # Filter by aspect ratio (insects tend to be somewhat elongated)
+            aspect_ratio = w / h if h > 0 else 0
             if aspect_ratio < self.min_aspect_ratio or aspect_ratio > self.max_aspect_ratio:
                 continue
-
-            #calc additional features
-
-            center = (x + w / 2, y + h / 2)
-
-            #create detection
+            
+            # Calculate additional features
+            center = (x + w/2, y + h/2)
+            
+            # Create detection
             detection = InsectDetection(
                 frame_number=frame_number,
                 timestamp=timestamp,
@@ -171,38 +168,37 @@ class InsectDetector:
                 area=area,
                 confidence=self._calculate_confidence(contour, area, aspect_ratio)
             )
-
+            
             detections.append(detection)
-
-        #update tracker
+        
+        # Update tracker
         tracked_detections = self.tracker.update(detections, frame_number)
-
-        #store the results
-
+        
+        # Store results
         self.frame_detections[frame_number] = tracked_detections
         self.all_detections.extend(tracked_detections)
-
+        
         return tracked_detections
     
     def _calculate_confidence(self, contour, area, aspect_ratio):
-        """Calculate confidence score for a detection"""
-        score = .5
-
-        #bonus for moderate size
-        if 50<=area<=200:
-            score +=.2
+        """Calculate confidence score for detection"""
+        score = 0.5  # Base score
         
-        #insect like aspect ratio
-        if .5<=aspect_ratio<=2.0:
-            score +=.2
-
-        #bonus for relatively smooth contour (pollinator vs random noise)
+        # Bonus for moderate size
+        if 50 <= area <= 200:
+            score += 0.2
+        
+        # Bonus for insect-like aspect ratio
+        if 0.5 <= aspect_ratio <= 2.0:
+            score += 0.2
+        
+        # Bonus for relatively smooth contour (insects vs noise)
         perimeter = cv2.arcLength(contour, True)
         if perimeter > 0:
-            circularity = 4 * np.pi * area / (perimeter * perimeter)
-            if .1 <= circularity <= .9:
-                score += .1
-
+            circularity = 4 * math.pi * area / (perimeter * perimeter)
+            if 0.1 <= circularity <= 0.9:  # Not too circular, not too irregular
+                score += 0.1
+        
         return min(score, 1.0)
     
     def process_video(self, video_path, output_path=None, max_frames=None):
@@ -394,11 +390,11 @@ def main():
     """Main function for testing"""
     
     # Example usage
-    video_path = "/Users/jame/Downloads/IMG_4527.mov"  # Use your video path
+    video_path = "/Users/jame/Downloads/IMG_4532.mov"  # Use your video path
     
     # Create detector with parameters tuned for insects
     detector = InsectDetector(
-        min_area=15,      # Smaller insects
+        min_area=50,      # Smaller insects
         max_area=300,     # Medium-sized insects
         min_aspect_ratio=0.2,  # Can be quite elongated
         max_aspect_ratio=5.0,
@@ -415,7 +411,7 @@ def main():
     summary = detector.process_video(
         video_path, 
         output_path=output_video,
-        max_frames=1000  # Limit for testing
+        max_frames=36000  # Around 10 minute limit for testing
     )
     
     # Export results for Swift UI
