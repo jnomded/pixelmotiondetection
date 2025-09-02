@@ -240,7 +240,7 @@ class InsectDetector:
         
         return min(score, 1.0)
     
-    def process_video(self, video_path, output_path=None, max_frames=None, motion_video_path=None):
+    def process_video(self, video_path, output_path=None, max_frames=None, motion_video_path=None, progress_callback=None):
         """Process entire video for insect detection"""
         
         cap = cv2.VideoCapture(video_path)
@@ -306,6 +306,11 @@ class InsectDetector:
                 out.write(annotated_frame)
             
             frame_number += 1
+            
+            # Call progress callback
+            if progress_callback:
+                unique_tracks = len(set(d.track_id for d in self.all_detections if d.track_id is not None))
+                progress_callback(frame_number, total_frames, len(self.all_detections), unique_tracks)
             
             if frame_number % 100 == 0:
                 elapsed = time.time() - start_time

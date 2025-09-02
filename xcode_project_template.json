@@ -1,0 +1,29 @@
+{
+  "package_swift": "// swift-tools-version: 5.7\nimport PackageDescription\n\nlet package = Package(\n    name: \"InsectDetection\",\n    platforms: [\n        .macOS(.v11)\n    ],\n    products: [\n        .executable(name: \"InsectDetection\", targets: [\"InsectDetection\"])\n    ],\n    dependencies: [\n        // Add any external dependencies here\n    ],\n    targets: [\n        .executableTarget(\n            name: \"InsectDetection\",\n            dependencies: [],\n            resources: [\n                .process(\"Resources\")\n            ]\n        ),\n        .testTarget(\n            name: \"InsectDetectionTests\",\n            dependencies: [\"InsectDetection\"]\n        )\n    ]\n)\n",
+  "build_settings": {
+    "MACOSX_DEPLOYMENT_TARGET": "11.0",
+    "SWIFT_VERSION": "5.0",
+    "PRODUCT_BUNDLE_IDENTIFIER": "com.research.insectdetection",
+    "PRODUCT_NAME": "Insect Detection",
+    "MARKETING_VERSION": "1.0",
+    "CURRENT_PROJECT_VERSION": "1"
+  },
+  "project_structure": {
+    "Package.swift": "// swift-tools-version: 5.7\nimport PackageDescription\n\nlet package = Package(\n    name: \"InsectDetection\",\n    platforms: [\n        .macOS(.v11)\n    ],\n    products: [\n        .executable(name: \"InsectDetection\", targets: [\"InsectDetection\"])\n    ],\n    dependencies: [\n        // Add any external dependencies here\n    ],\n    targets: [\n        .executableTarget(\n            name: \"InsectDetection\",\n            dependencies: [],\n            resources: [\n                .process(\"Resources\")\n            ]\n        ),\n        .testTarget(\n            name: \"InsectDetectionTests\",\n            dependencies: [\"InsectDetection\"]\n        )\n    ]\n)\n",
+    "Sources/InsectDetection/main.swift": "// Main app entry point\n@main\nstruct InsectDetectionApp: App { /* ... */ }",
+    "Sources/InsectDetection/Models/": "// Data models directory",
+    "Sources/InsectDetection/Views/": "// SwiftUI views directory",
+    "Sources/InsectDetection/Services/": "// API services directory",
+    "Resources/": "// App resources directory",
+    "Tests/InsectDetectionTests/": "// Unit tests directory"
+  },
+  "instructions": [
+    "1. Create new macOS app in Xcode",
+    "2. Replace ContentView.swift with the provided SwiftUI code",
+    "3. Add the data models to a separate Models group",
+    "4. Create an API service class in Services group",
+    "5. Update Info.plist with document types for video files",
+    "6. Add App Sandbox entitlements for file access",
+    "7. Test with the Python backend running locally"
+  ]
+}
